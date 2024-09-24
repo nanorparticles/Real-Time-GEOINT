@@ -1,0 +1,6 @@
+{
+    "bootstrap_servers": ["localhost:9092"],
+    "key_serializer": "org.apache.kafka.common.serialization.StringSerializer",
+    "value_serializer": "org.apache.kafka.common.serialization.StringSerializer"
+  }
+  
