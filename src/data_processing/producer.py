@@ -1,95 +1,85 @@
-import logging
-from kafka import KafkaProducer
 import boto3
-import osmpbf
+import logging
+import json
+from kafka import KafkaProducer
+import OSMPythonTools
 from io import BytesIO
-from botocore.exceptions import NoCredentialsError
-
+print(dir(OSMPythonTools))
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# AWS S3 Configuration
-bucket_name = 'mymapdata'
-file_key = 'data\\raw\\central-america-latest.osm.pbf'
+# Initialize S3 client
+s3 = boto3.client('s3', endpoint_url='https://mymapdata.s3.amazonaws.com/central-america-latest.osm.pbf')
+
+# List objects in the bucket
+bucket = "mymapdata"
+response = s3.list_objects_v2(Bucket=bucket)
+
+# Print out all the keys in the bucket to verify the exact key name
+if 'Contents' in response:
+    for obj in response['Contents']:
+        print(f"Key: {obj['Key']}")
+else:
+    print("No objects found in the bucket.")
 
 
-# Kafka Configuration
-topic = 'geospatial-data'
-bootstrap_servers = ['localhost:9092']
 
-def create_kafka_producer():
-    """Create Kafka producer."""
-    producer = KafkaProducer(
-        bootstrap_servers=bootstrap_servers,
-        value_serializer=lambda v: v  # Send raw binary data without encoding
-    )
-    return producer
+# Kafka Producer configuration
+producer = KafkaProducer(
+    bootstrap_servers=['localhost:9092'], 
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
 
-def download_pbf_from_s3(bucket_name, file_key):
-    """Download PBF file from S3."""
-    s3 = boto3.client('s3')
+# Function to fetch OSM data from S3 and process it with OSMPythonTools
+def process_osm_from_s3(bucket_name, object_key, kafka_topic):
     try:
-        response = s3.get_object(Bucket=bucket_name, Key=file_key)
-        file_data = response['Body'].read()
-        logging.info(f"Downloaded PBF file from S3 bucket {bucket_name}, key: {file_key}")
-        return file_data
-    except NoCredentialsError:
-        logging.error("AWS credentials not found.")
-    except Exception as e:
-        logging.error(f"Error downloading PBF file from S3: {e}")
-        return None
+        # Fetch the OSM PBF file from S3
+        response = s3.get_object(Bucket=bucket_name, Key=object_key)
+        osm_pbf_data = BytesIO(response['Body'].read())
 
-def parse_and_send_to_kafka(producer, topic, pbf_data):
-    """Parse PBF data and send structured data to Kafka."""
+        # Parse OSM data using OSMPythonTools
+        osm_data = osmxml.OSM(osm_pbf_data)
+
+        # Iterate through the OSM data and convert it to GeoJSON
+        for element in osm_data.ways:
+            geojson_data = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [(node.lon, node.lat) for node in element.nodes]
+                },
+                "properties": {
+                    "id": element.id,
+                    "tags": element.tags
+                }
+            }
+            
+            # Send parsed GeoJSON data to Kafka
+            send_to_kafka(kafka_topic, geojson_data)
+
+        logging.info("OSM data processing and Kafka streaming completed.")
+        
+    except Exception as e:
+        logging.error(f"Error processing OSM data from S3: {e}")
+
+# Function to send data to Kafka
+def send_to_kafka(topic, data):
     try:
-        # Parse PBF data
-        file_stream = BytesIO(pbf_data)
-        decoder = osmpbf.FileStream(file_stream)
-
-        logging.info("Parsing PBF data and sending to Kafka.")
-
-        for entity in decoder:
-            if isinstance(entity, osmpbf.Node):  # If it's a Node
-                message = {
-                    "type": "node",
-                    "id": entity.id,
-                    "lat": entity.lat,
-                    "lon": entity.lon,
-                    "tags": entity.tags
-                }
-            elif isinstance(entity, osmpbf.Way):  # If it's a Way
-                message = {
-                    "type": "way",
-                    "id": entity.id,
-                    "refs": entity.refs,
-                    "tags": entity.tags
-                }
-            elif isinstance(entity, osmpbf.Relation):  # If it's a Relation
-                message = {
-                    "type": "relation",
-                    "id": entity.id,
-                    "members": entity.members,
-                    "tags": entity.tags
-                }
-            else:
-                continue
-
-            # Send each structured message to Kafka
-            producer.send(topic, value=json.dumps(message).encode('utf-8'))
-
-        producer.flush()  # Ensure all data is sent to Kafka
-        logging.info("Data parsed and streamed to Kafka successfully.")
-    
+        producer.send(topic, value=data)
+        logging.info(f"Successfully sent data to Kafka topic {topic}")
     except Exception as e:
-        logging.error(f"Error parsing and sending PBF data to Kafka: {e}")
+        logging.error(f"Error sending data to Kafka: {e}")
 
 if __name__ == "__main__":
-    # Initialize Kafka producer
-    kafka_producer = create_kafka_producer()
+    # S3 bucket and object details
+    bucket_name = "mymapdata"
+    object_key = 'central-america-latest.osm.pbf'
 
-    # Download PBF file from S3
-    pbf_data = download_pbf_from_s3(bucket_name, file_key)
+    # Kafka topic to send data
+    kafka_topic = "geospatial-data"
 
-    if pbf_data:
-        # Parse and send structured data to Kafka
-        parse_and_send_to_kafka(kafka_producer, topic, pbf_data)
+    # Process OSM data from S3 and send to Kafka
+    process_osm_from_s3(bucket_name, object_key, kafka_topic)
+
+    # Cleanup
+    producer.close()
