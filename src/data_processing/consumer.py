@@ -18,7 +18,6 @@ def consume_osm_data():
         for message in consumer:
             geojson_data = message.value
 
-            # Process the GeoJSON data (this is where your custom logic would go)
             process_geojson_data(geojson_data)
     
     except Exception as e:
@@ -26,7 +25,6 @@ def consume_osm_data():
 
 # Function to process the GeoJSON data
 def process_geojson_data(data):
-    # Example processing: Print the data (can be replaced with actual processing logic)
     logging.info(f"Received GeoJSON data: {data}")
 
 if __name__ == "__main__":
