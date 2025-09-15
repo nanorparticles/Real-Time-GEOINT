@@ -1,0 +1,6 @@
+{
+    "bootstrap_servers": ["localhost:9092"],
+    "topic": "geospatial-data",
+    "group_id": "my-consumer-group"
+  }
+  

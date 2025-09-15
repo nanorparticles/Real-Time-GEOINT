@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Geospatial Intelligence Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; padding: 0; }
+    .controls { position: absolute; top: 10px; left: 10px; z-index: 1000; background: white; padding: 8px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+    .controls label { display:block; font: 12px sans-serif; margin-bottom: 4px; }
+    .controls input { width: 120px; }
+    .controls button { margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="controls">
+    <label>BBox-based load (EPSG:4326)</label>
+    <button id="loadBtn">Load Current View</button>
+    <div>
+      <label><input type="checkbox" id="toggleAnoms" checked /> Show anomalies</label>
+      <div id="anomMethod" style="margin-top:6px;">
+        <label style="display:block;"><input type="checkbox" id="showMad" checked /> MAD</label>
+        <label style="display:block;"><input type="checkbox" id="showIf" checked /> IsolationForest</label>
+      </div>
+    </div>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const layer = L.geoJSON(null, {
+      style: f => ({ color: '#ff6b00', weight: 2, fillOpacity: 0.2 }),
+      pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 4, color: '#ff6b00' })
+    }).addTo(map);
+
+    const anomalies = L.geoJSON(null, {
+      style: f => {
+        const metric = f?.properties?.anomaly?.metric || '';
+        const isIF = metric.endsWith('_iforest');
+        return { color: isIF ? '#cc0000' : '#ff5c00', weight: 3, dashArray: '4,3', fillOpacity: 0.15 };
+      },
+      pointToLayer: (f, latlng) => {
+        const metric = f?.properties?.anomaly?.metric || '';
+        const isIF = metric.endsWith('_iforest');
+        return L.circleMarker(latlng, { radius: 5, color: isIF ? '#cc0000' : '#ff5c00' });
+      }
+    }).addTo(map);
+
+    async function loadBBox() {
+      const b = map.getBounds();
+      const minx = b.getWest();
+      const miny = b.getSouth();
+      const maxx = b.getEast();
+      const maxy = b.getNorth();
+      const url = `/features/within?bbox=${minx},${miny},${maxx},${maxy}&limit=2000`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        alert('Failed to load features');
+        return;
+      }
+      const fc = await res.json();
+      layer.clearLayers();
+      layer.addData(fc);
+
+      if (document.getElementById('toggleAnoms').checked) {
+        const url2 = `/anomalies/within?bbox=${minx},${miny},${maxx},${maxy}&limit=2000`;
+        const res2 = await fetch(url2);
+        if (res2.ok) {
+          const anfc = await res2.json();
+          const showMad = document.getElementById('showMad').checked;
+          const showIf = document.getElementById('showIf').checked;
+          const suffixes = [showMad ? '_mad' : null, showIf ? '_iforest' : null].filter(Boolean);
+          anomalies.clearLayers();
+          if (suffixes.length > 0) {
+            const filtered = {
+              type: 'FeatureCollection',
+              features: (anfc.features || []).filter(f => {
+                const m = f?.properties?.anomaly?.metric || '';
+                return suffixes.some(sfx => m.endsWith(sfx));
+              })
+            };
+            anomalies.addData(filtered);
+          }
+        }
+      } else {
+        anomalies.clearLayers();
+      }
+    }
+
+    document.getElementById('loadBtn').addEventListener('click', loadBBox);
+    document.getElementById('toggleAnoms').addEventListener('change', () => {
+      const enabled = document.getElementById('toggleAnoms').checked;
+      document.getElementById('anomMethod').style.display = enabled ? 'block' : 'none';
+      loadBBox();
+    });
+    document.getElementById('showMad').addEventListener('change', loadBBox);
+    document.getElementById('showIf').addEventListener('change', loadBBox);
+  </script>
+</body>
+</html>
